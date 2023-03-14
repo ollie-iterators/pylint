@@ -15,7 +15,6 @@ import sys
 from collections import defaultdict
 from collections.abc import Generator, Iterable, Iterator
 from enum import Enum
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import astroid
@@ -27,6 +26,8 @@ from pylint.checkers import BaseChecker, utils
 from pylint.checkers.utils import (
     in_type_checking_block,
     is_postponed_evaluation_enabled,
+    is_sys_guard,
+    overridden_method,
 )
 from pylint.constants import PY39_PLUS, TYPING_NEVER, TYPING_NORETURN
 from pylint.interfaces import CONTROL_FLOW, HIGH, INFERENCE, INFERENCE_FAILURE
@@ -147,26 +148,6 @@ def _is_from_future_import(stmt: nodes.ImportFrom, name: str) -> bool | None:
     for local_node in module.locals.get(name, []):
         if isinstance(local_node, nodes.ImportFrom) and local_node.modname == FUTURE:
             return True
-    return None
-
-
-@lru_cache(maxsize=1000)
-def overridden_method(
-    klass: nodes.LocalsDictNodeNG, name: str | None
-) -> nodes.FunctionDef | None:
-    """Get overridden method if any."""
-    try:
-        parent = next(klass.local_attr_ancestors(name))
-    except (StopIteration, KeyError):
-        return None
-    try:
-        meth_node = parent[name]
-    except KeyError:
-        # We have found an ancestor defining <name> but it's not in the local
-        # dictionary. This may happen with astroid built from living objects.
-        return None
-    if isinstance(meth_node, nodes.FunctionDef):
-        return meth_node
     return None
 
 
@@ -1891,9 +1872,10 @@ class VariablesChecker(BaseChecker):
             # No need to verify this, since ImportError is already
             # handled by the client code.
             return
-        if utils.is_node_in_guarded_import_block(node) is True:
-            # Don't verify import if part of guarded import block
-            # I.e. `sys.version_info` or `typing.TYPE_CHECKING`
+        # Don't verify import if part of guarded import block
+        if in_type_checking_block(node):
+            return
+        if isinstance(node.parent, nodes.If) and is_sys_guard(node.parent):
             return
 
         for name, _ in node.names:
@@ -1913,9 +1895,11 @@ class VariablesChecker(BaseChecker):
             # No need to verify this, since ImportError is already
             # handled by the client code.
             return
-        if utils.is_node_in_guarded_import_block(node) is True:
-            # Don't verify import if part of guarded import block
-            # I.e. `sys.version_info` or `typing.TYPE_CHECKING`
+        # Don't verify import if part of guarded import block
+        # I.e. `sys.version_info` or `typing.TYPE_CHECKING`
+        if in_type_checking_block(node):
+            return
+        if isinstance(node.parent, nodes.If) and is_sys_guard(node.parent):
             return
 
         name_parts = node.modname.split(".")
@@ -2250,7 +2234,7 @@ class VariablesChecker(BaseChecker):
             return any(
                 VariablesChecker._maybe_used_and_assigned_at_once(elt)
                 for elt in defstmt.value.elts
-                if isinstance(elt, NODES_WITH_VALUE_ATTR + (nodes.IfExp, nodes.Match))
+                if isinstance(elt, (*NODES_WITH_VALUE_ATTR, nodes.IfExp, nodes.Match))
             )
         value = defstmt.value
         if isinstance(value, nodes.IfExp):
@@ -2892,7 +2876,7 @@ class VariablesChecker(BaseChecker):
     @staticmethod
     def _nodes_to_unpack(node: nodes.NodeNG) -> list[nodes.NodeNG] | None:
         """Return the list of values of the `Assign` node."""
-        if isinstance(node, (nodes.Tuple, nodes.List) + DICT_TYPES):
+        if isinstance(node, (nodes.Tuple, nodes.List, *DICT_TYPES)):
             return node.itered()  # type: ignore[no-any-return]
         if isinstance(node, astroid.Instance) and any(
             ancestor.qname() == "typing.NamedTuple" for ancestor in node.ancestors()

@@ -12,6 +12,7 @@ import itertools
 import numbers
 import re
 import string
+import warnings
 from collections import deque
 from collections.abc import Iterable, Iterator
 from functools import lru_cache, partial
@@ -357,7 +358,7 @@ def is_defined_before(var_node: nodes.Name) -> bool:
         if defnode is None:
             continue
         defnode_scope = defnode.scope()
-        if isinstance(defnode_scope, COMP_NODE_TYPES + (nodes.Lambda,)):
+        if isinstance(defnode_scope, (*COMP_NODE_TYPES, nodes.Lambda)):
             # Avoid the case where var_node_scope is a nested function
             # FunctionDef is a Lambda until https://github.com/PyCQA/astroid/issues/291
             if isinstance(defnode_scope, nodes.FunctionDef):
@@ -1798,6 +1799,11 @@ def is_typing_guard(node: nodes.If) -> bool:
     >>> if TYPE_CHECKING:
     >>>     from xyz import a
     """
+    warnings.warn(
+        "This method will be removed in pylint 3.0; use in_type_checking_block() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )  # pragma: no cover
     return isinstance(
         node.test, (nodes.Name, nodes.Attribute)
     ) and node.test.as_string().endswith("TYPE_CHECKING")
@@ -1805,6 +1811,11 @@ def is_typing_guard(node: nodes.If) -> bool:
 
 def is_node_in_typing_guarded_import_block(node: nodes.NodeNG) -> bool:
     """Return True if node is part for guarded `typing.TYPE_CHECKING` if block."""
+    warnings.warn(
+        "This method will be removed in pylint 3.0; use in_type_checking_block() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )  # pragma: no cover
     return isinstance(node.parent, nodes.If) and is_typing_guard(node.parent)
 
 
@@ -1813,6 +1824,11 @@ def is_node_in_guarded_import_block(node: nodes.NodeNG) -> bool:
 
     I.e. `sys.version_info` or `typing.TYPE_CHECKING`
     """
+    warnings.warn(
+        "This method will be removed in pylint 3.0; use in_type_checking_block() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )  # pragma: no cover
     return isinstance(node.parent, nodes.If) and (
         is_sys_guard(node.parent) or is_typing_guard(node.parent)
     )
@@ -2250,11 +2266,28 @@ def not_condition_as_string(
     return msg
 
 
+@lru_cache(maxsize=1000)
+def overridden_method(
+    klass: nodes.LocalsDictNodeNG, name: str | None
+) -> nodes.FunctionDef | None:
+    """Get overridden method if any."""
+    try:
+        parent = next(klass.local_attr_ancestors(name))
+    except (StopIteration, KeyError):
+        return None
+    try:
+        meth_node = parent[name]
+    except KeyError:  # pragma: no cover
+        # We have found an ancestor defining <name> but it's not in the local
+        # dictionary. This may happen with astroid built from living objects.
+        return None
+    if isinstance(meth_node, nodes.FunctionDef):
+        return meth_node
+    return None  # pragma: no cover
+
+
 def clear_lru_caches() -> None:
     """Clear caches holding references to AST nodes."""
-    # pylint: disable-next=import-outside-toplevel
-    from pylint.checkers.variables import overridden_method
-
     caches_holding_node_references: list[_lru_cache_wrapper[Any]] = [
         in_for_else_branch,
         infer_all,
