@@ -41,7 +41,9 @@ DEFAULT_PATTERNS = {
     "typevar": re.compile(
         r"^_{0,2}(?!T[A-Z])(?:[A-Z]+|(?:[A-Z]+[a-z]+)+T?(?<!Type))(?:_co(?:ntra)?)?$"
     ),
-    "typealias": re.compile(r"^_{0,2}(?!T[A-Z]|Type)[A-Z]+[a-z]+(?:[A-Z][a-z]+)*$"),
+    "typealias": re.compile(
+        r"^_{0,2}(?!T[A-Z]|Type)[A-Z]+[a-z0-9]+(?:[A-Z][a-z0-9]+)*$"
+    ),
 }
 
 BUILTIN_PROPERTY = "builtins.property"
@@ -597,7 +599,13 @@ class NameChecker(_BasicChecker):
         inferred = utils.safe_infer(node)
         if isinstance(inferred, nodes.ClassDef):
             if inferred.qname() == ".Union":
-                return True
+                # Union is a special case because it can be used as a type alias
+                # or as a type annotation. We only want to check the former.
+                assert node is not None
+                return not (
+                    isinstance(node.parent, nodes.AnnAssign)
+                    and node.parent.value is not None
+                )
         elif isinstance(inferred, nodes.FunctionDef):
             if inferred.qname() == "typing.TypeAlias":
                 return True
